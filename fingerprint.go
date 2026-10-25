@@ -260,6 +260,7 @@ func (c *transportCache) client(name string, version httpVersion, insecure bool)
 
 	var transport http.RoundTripper
 	if slices.Contains(fp.alpn, "h2") {
+		//nolint:staticcheck // Custom uTLS connections require the standalone HTTP/2 transport.
 		transport = &http2.Transport{
 			DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
 				return fp.dial(ctx, network, addr)

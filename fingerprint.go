@@ -24,19 +24,6 @@ const (
 	httpVersion2
 )
 
-func parseHTTPVersion(raw string) (httpVersion, error) {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", "auto":
-		return httpVersionAuto, nil
-	case "1", "1.1", "http/1.1", "http1", "h1":
-		return httpVersion11, nil
-	case "2", "2.0", "http/2", "http/2.0", "http2", "h2":
-		return httpVersion2, nil
-	default:
-		return 0, fmt.Errorf("invalid tls-http-version %q (use auto, 1.1, or 2)", raw)
-	}
-}
-
 type fingerprint struct {
 	name     string
 	newSpec  func() (*utls.ClientHelloSpec, error)
@@ -46,9 +33,7 @@ type fingerprint struct {
 }
 
 func resolveFingerprint(name string, version httpVersion, insecure bool) (*fingerprint, error) {
-	key := strings.ToLower(strings.TrimSpace(name))
-
-	key = strings.ReplaceAll(key, "-", "_")
+	key := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(name)), "-", "_")
 	if key == "" {
 		key = "bun"
 	}
@@ -107,23 +92,22 @@ func resolveFingerprint(name string, version httpVersion, insecure bool) (*finge
 	}
 
 	newSpec := func() (*utls.ClientHelloSpec, error) {
-		var (
-			spec *utls.ClientHelloSpec
-			err  error
-		)
+		var spec *utls.ClientHelloSpec
+
 		if usesBunSpec {
+			var err error
+
 			spec, err = bunhello.Spec()
-		} else {
-			var generated utls.ClientHelloSpec
-
-			generated, err = utls.UTLSIdToSpec(id)
-			if err == nil {
-				spec = &generated
+			if err != nil {
+				return nil, err
 			}
-		}
+		} else {
+			generated, err := utls.UTLSIdToSpec(id)
+			if err != nil {
+				return nil, err
+			}
 
-		if err != nil {
-			return nil, err
+			spec = &generated
 		}
 
 		if version != httpVersionAuto {
@@ -186,10 +170,12 @@ func (f *fingerprint) dial(ctx context.Context, network, addr string) (net.Conn,
 		NextProtos:         f.alpn,
 	}
 
-	conn := utls.UClient(raw, config, utls.HelloCustom)
+	var conn *utls.UConn
 	if f.helloID != nil {
 		conn = utls.UClient(raw, config, *f.helloID)
 	} else {
+		conn = utls.UClient(raw, config, utls.HelloCustom)
+
 		spec, err := f.newSpec()
 		if err != nil {
 			_ = raw.Close()

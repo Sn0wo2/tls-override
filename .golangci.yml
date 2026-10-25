@@ -1,6 +1,11 @@
 version: "2"
 
 linters:
+  exclusions:
+    rules:
+      - path: ^(scripts/capture-tls/)?main\.go$
+        linters:
+          - maintidx
   enable:
     - asasalint
     - asciicheck

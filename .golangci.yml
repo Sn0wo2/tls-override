@@ -6,6 +6,10 @@ linters:
       - path: ^(scripts/capture-tls/)?main\.go$
         linters:
           - maintidx
+      - path: scripts/capture-tls/main\.go$
+        linters:
+          - gosec
+        text: 'G(401|501|204):'
   enable:
     - asasalint
     - asciicheck

@@ -1,6 +1,7 @@
 version: "2"
 
 linters:
+  default: none
   exclusions:
     rules:
       - path: ^(scripts/capture-tls/)?main\.go$
@@ -22,6 +23,7 @@ linters:
     - dupl
     - dupword
     - durationcheck
+    - errcheck
     - errchkjson
     - errname
     - errorlint
@@ -37,7 +39,9 @@ linters:
     - gosec
     - gosmopolitan
     - goprintffuncname
+    - govet
     - inamedparam
+    - ineffassign
     - interfacebloat
     - iface
     - intrange
@@ -61,9 +65,11 @@ linters:
     - protogetter
     - recvcheck
     - reassign
+    - revive
     - rowserrcheck
     - sloglint
     - spancheck
+    - staticcheck
     - tagalign
     - testableexamples
     - testifylint
@@ -71,12 +77,19 @@ linters:
     - tparallel
     - unconvert
     - unparam
+    - unused
     - usestdlibvars
     - usetesting
     - wastedassign
     - whitespace
     - wsl_v5
     - zerologlint
+
+  settings:
+    revive:
+      enable-default-rules: false
+      rules:
+        - name: var-declaration
 
 run:
   concurrency: 4

@@ -4,7 +4,7 @@ linters:
   default: none
   exclusions:
     rules:
-      - path: ^(scripts/capture-tls/)?main\.go$
+      - path: ^(cmd|scripts/capture-tls)/main\.go$
         linters:
           - maintidx
       - path: scripts/capture-tls/main\.go$

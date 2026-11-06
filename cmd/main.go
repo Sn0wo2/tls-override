@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,7 +14,6 @@ import (
 	"tls-override/utils"
 
 	"github.com/Sn0wo2/caelum"
-	"github.com/labstack/echo/v4"
 )
 
 func main() {
@@ -29,43 +29,29 @@ func main() {
 	}
 
 	cache := &transportCache{}
-	plain := &http.Client{
-		Transport: &http.Transport{DisableCompression: true},
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	e := echo.New()
-	e.HideBanner = true
-	e.HidePort = true
-	e.HTTPErrorHandler = func(err error, c echo.Context) {
-		if c.Response().Committed {
-			return
-		}
+	plain := &http.Transport{DisableCompression: true}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeError := func(code int, message string) {
+			encoder := json.NewEncoder(w)
+			if r.URL.Query().Has("pretty") {
+				encoder.SetIndent("", "  ")
+			}
 
-		code := http.StatusInternalServerError
-		message := http.StatusText(code)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(code)
 
-		var httpErr *echo.HTTPError
-		if errors.As(err, &httpErr) {
-			code = httpErr.Code
-			message = fmt.Sprint(httpErr.Message)
+			if err := encoder.Encode(struct {
+				Msg string `json:"msg"`
+			}{Msg: message}); err != nil {
+				logger.Error("write error response", "error", err)
+			}
 		}
-
-		if err := c.JSON(code, struct {
-			Msg  string `json:"msg"`
-			Data any    `json:"data,omitempty"`
-		}{Msg: message}); err != nil {
-			logger.Error("write error response", "error", err)
-		}
-	}
-	e.Any("/*", func(c echo.Context) error {
-		r := c.Request()
-		w := c.Response()
 
 		raw := strings.TrimSpace(r.Header.Get("Tls-Override"))
 		if raw == "" {
-			return echo.NewHTTPError(http.StatusBadRequest, "missing tls-override header")
+			writeError(http.StatusBadRequest, "missing tls-override header")
+
+			return
 		}
 
 		if !strings.Contains(raw, "://") {
@@ -74,16 +60,22 @@ func main() {
 
 		target, err := url.Parse(raw)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid target URL: %v", err))
+			writeError(http.StatusBadRequest, fmt.Sprintf("invalid target URL: %v", err))
+
+			return
 		}
 
 		target.Scheme = strings.ToLower(target.Scheme)
 		if target.Scheme != "http" && target.Scheme != "https" {
-			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("unsupported target scheme %q", target.Scheme))
+			writeError(http.StatusBadRequest, fmt.Sprintf("unsupported target scheme %q", target.Scheme))
+
+			return
 		}
 
 		if target.Host == "" {
-			return echo.NewHTTPError(http.StatusBadRequest, "target URL has no host")
+			writeError(http.StatusBadRequest, "target URL has no host")
+
+			return
 		}
 
 		target.Fragment = ""
@@ -116,7 +108,9 @@ func main() {
 		case "2", "2.0", "http/2", "http/2.0", "http2", "h2":
 			version = httpVersion2
 		default:
-			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid tls-http-version %q (use auto, 1.1, or 2)", r.Header.Get("Tls-Http-Version")))
+			writeError(http.StatusBadRequest, fmt.Sprintf("invalid tls-http-version %q (use auto, 1.1, or 2)", r.Header.Get("Tls-Http-Version")))
+
+			return
 		}
 
 		insecure := false
@@ -126,14 +120,18 @@ func main() {
 		case "true", "1":
 			insecure = true
 		default:
-			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("invalid tls-insecure %q (use true or false)", r.Header.Get("Tls-Insecure")))
+			writeError(http.StatusBadRequest, fmt.Sprintf("invalid tls-insecure %q (use true or false)", r.Header.Get("Tls-Insecure")))
+
+			return
 		}
 
-		client := plain
+		var transport http.RoundTripper = plain
 		if target.Scheme == "https" {
-			client, err = cache.client(fingerprintName, version, insecure)
+			transport, err = cache.transport(fingerprintName, version, insecure)
 			if err != nil {
-				return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+				writeError(http.StatusBadRequest, err.Error())
+
+				return
 			}
 		}
 
@@ -141,12 +139,9 @@ func main() {
 		out.URL = target
 		out.RequestURI = ""
 		out.Host = utils.HostHeader(target)
-		out.Body = r.Body
 		out.GetBody = nil
-		out.ContentLength = r.ContentLength
 		out.TransferEncoding = nil
 		out.Close = false
-		out.Header = r.Header.Clone()
 		utils.StripHopByHop(out.Header)
 		out.Header.Del("Host")
 		out.Header.Del("Content-Length")
@@ -169,9 +164,11 @@ func main() {
 			}
 		}
 
-		resp, err := client.Transport.RoundTrip(out)
+		resp, err := transport.RoundTrip(out)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusBadGateway, err.Error())
+			writeError(http.StatusBadGateway, err.Error())
+
+			return
 		}
 		defer func() {
 			_ = resp.Body.Close()
@@ -193,10 +190,12 @@ func main() {
 			n, err := resp.Body.Read(buf)
 			if n > 0 {
 				if _, writeErr := w.Write(buf[:n]); writeErr != nil {
-					return writeErr
+					return
 				}
 
-				w.Flush()
+				if err := http.NewResponseController(w).Flush(); err != nil {
+					return
+				}
 			}
 
 			if err != nil {
@@ -204,18 +203,19 @@ func main() {
 					logger.Error("read upstream response", "method", r.Method, "path", r.URL.Path, "error", err)
 				}
 
-				return nil
+				return
 			}
 		}
 	})
 
 	logger.Info("tls-override listening", "url", "http://"+*listen)
 
-	if err := e.StartServer(&http.Server{
+	if err := (&http.Server{
 		Addr:              *listen,
+		Handler:           handler,
 		ReadHeaderTimeout: 15 * time.Second,
 		IdleTimeout:       90 * time.Second,
-	}); err != nil {
+	}).ListenAndServe(); err != nil {
 		logger.Error("serve", "error", err)
 		os.Exit(1)
 	}

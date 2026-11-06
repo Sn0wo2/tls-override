@@ -25,7 +25,6 @@ const (
 )
 
 type fingerprint struct {
-	name     string
 	newSpec  func() (*utls.ClientHelloSpec, error)
 	helloID  *utls.ClientHelloID
 	alpn     []string
@@ -84,7 +83,6 @@ func resolveFingerprint(name string, version httpVersion, insecure bool) (*finge
 
 	if helloID != nil {
 		return &fingerprint{
-			name:     key,
 			helloID:  helloID,
 			alpn:     alpn,
 			insecure: insecure,
@@ -146,7 +144,6 @@ func resolveFingerprint(name string, version httpVersion, insecure bool) (*finge
 	}
 
 	return &fingerprint{
-		name:     key,
 		newSpec:  newSpec,
 		alpn:     alpn,
 		insecure: insecure,
@@ -214,34 +211,37 @@ func (f *fingerprint) dial(ctx context.Context, network, addr string) (net.Conn,
 	return conn, nil
 }
 
-type clientKey struct {
+type transportKey struct {
 	name     string
 	version  httpVersion
 	insecure bool
 }
 
 type transportCache struct {
-	mu      sync.Mutex
-	clients map[clientKey]*http.Client
+	mu         sync.Mutex
+	transports map[transportKey]http.RoundTripper
 }
 
-func (c *transportCache) client(name string, version httpVersion, insecure bool) (*http.Client, error) {
-	fp, err := resolveFingerprint(name, version, insecure)
-	if err != nil {
-		return nil, err
+func (c *transportCache) transport(name string, version httpVersion, insecure bool) (http.RoundTripper, error) {
+	key := transportKey{
+		name:     strings.ReplaceAll(strings.ToLower(strings.TrimSpace(name)), "-", "_"),
+		version:  version,
+		insecure: insecure,
 	}
-
-	key := clientKey{name: fp.name, version: version, insecure: insecure}
+	if key.name == "" {
+		key.name = "bun"
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.clients == nil {
-		c.clients = make(map[clientKey]*http.Client)
+	if transport, ok := c.transports[key]; ok {
+		return transport, nil
 	}
 
-	if client, ok := c.clients[key]; ok {
-		return client, nil
+	fp, err := resolveFingerprint(name, version, insecure)
+	if err != nil {
+		return nil, err
 	}
 
 	var transport http.RoundTripper
@@ -261,13 +261,11 @@ func (c *transportCache) client(name string, version httpVersion, insecure bool)
 		}
 	}
 
-	client := &http.Client{
-		Transport: transport,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
+	if c.transports == nil {
+		c.transports = make(map[transportKey]http.RoundTripper)
 	}
-	c.clients[key] = client
 
-	return client, nil
+	c.transports[key] = transport
+
+	return transport, nil
 }

@@ -2,7 +2,7 @@ version: 2
 
 builds:
   - id: app
-    main: .
+    main: ./cmd
     binary: tls-override
     env:
       - CGO_ENABLED=0
